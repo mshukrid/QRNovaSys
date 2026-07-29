@@ -14,6 +14,8 @@ type RecordItem = {
 };
 
 const STORAGE_KEY = "qrnova-lab-records";
+const DRIVE_TOKEN_KEY = "qrnova-drive-token";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw4zPOHM9jx4xoNYOAliZxCW-0FfCVeJalFpP9_UnCrIMFv03zaIcAbWNkjCk5hlBbiiQ/exec";
 const tabs: { id: Module; label: string; short: string; icon: string }[] = [
   { id: "dashboard", label: "Ringkasan", short: "Utama", icon: "⌂" },
   { id: "log", label: "Buku Log", short: "Log", icon: "✓" },
@@ -40,10 +42,14 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [search, setSearch] = useState("");
   const [driveState, setDriveState] = useState<"offline" | "ready" | "syncing">("offline");
+  const [driveToken, setDriveToken] = useState("");
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     setRecords(saved ? JSON.parse(saved) : seed);
+    const token = localStorage.getItem(DRIVE_TOKEN_KEY) || "";
+    setDriveToken(token);
+    setDriveState(token ? "ready" : "offline");
   }, []);
 
   useEffect(() => {
@@ -57,7 +63,7 @@ export default function Home() {
     pass: records.filter(r => r.module === "mccb" && r.status === "Lulus").length,
   }), [records]);
 
-  const save = (module: RecordItem["module"], form: HTMLFormElement) => {
+  const save = async (module: RecordItem["module"], form: HTMLFormElement) => {
     const data = Object.fromEntries(new FormData(form).entries()) as Record<string, string>;
     const today = new Date().toISOString().slice(0, 10);
     const item: RecordItem = {
@@ -71,23 +77,57 @@ export default function Home() {
     };
     setRecords(prev => [item, ...prev]);
     form.reset();
-    setToast("Rekod berjaya disimpan");
-    setTimeout(() => setToast(""), 2400);
     setActive("dashboard");
+
+    if (!driveToken) {
+      setToast("Disimpan pada peranti • Sambungkan Google untuk simpan ke Drive");
+      setTimeout(() => setToast(""), 3200);
+      return;
+    }
+
+    setDriveState("syncing");
+    setToast("Menyimpan ke Google Sheets…");
+    try {
+      const response = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        redirect: "follow",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ token: driveToken, module, data: { ...data, id: item.id } }),
+      });
+      const result = await response.json();
+      if (!result.success) throw new Error(result.error || "Sambungan Google gagal.");
+      if (result.documentUrl) {
+        setRecords(prev => prev.map(record => record.id === item.id
+          ? { ...record, data: { ...record.data, documentUrl: result.documentUrl } }
+          : record));
+      }
+      setDriveState("ready");
+      setToast(result.documentUrl
+        ? "Disimpan ke Sheet • Google Doc berjaya dijana"
+        : "Disimpan ke Google Sheet");
+    } catch (error) {
+      setDriveState("offline");
+      setToast(`Salinan peranti selamat • ${error instanceof Error ? error.message : "Google tidak dapat dihubungi"}`);
+    }
+    setTimeout(() => setToast(""), 4200);
   };
 
   const submit = (module: RecordItem["module"]) => (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    save(module, e.currentTarget);
+    void save(module, e.currentTarget);
   };
 
   const syncDrive = () => {
-    setDriveState("syncing");
-    setTimeout(() => {
-      setDriveState("ready");
-      setToast("Salinan data sedia untuk Google Drive");
-      setTimeout(() => setToast(""), 2500);
-    }, 900);
+    const token = window.prompt(
+      "Tampal WEB_API_TOKEN daripada log setupProject(). Token disimpan pada peranti ini sahaja.",
+      driveToken,
+    );
+    if (!token?.trim()) return;
+    localStorage.setItem(DRIVE_TOKEN_KEY, token.trim());
+    setDriveToken(token.trim());
+    setDriveState("ready");
+    setToast("Google Sheets & Docs telah disambungkan");
+    setTimeout(() => setToast(""), 2800);
   };
 
   return (
@@ -97,7 +137,7 @@ export default function Home() {
           <div className="brandmark">QN</div>
           <div><strong>QRNova Lab</strong><small>Sistem Pengurusan Makmal</small></div>
         </div>
-        <div className={`sync ${driveState}`}><i />{driveState === "ready" ? "Drive disegerak" : driveState === "syncing" ? "Menyegerak…" : "Mod setempat"}</div>
+        <button className={`sync ${driveState}`} onClick={syncDrive} title="Tetapan Google Sheets & Docs"><i />{driveState === "ready" ? "Google disambung" : driveState === "syncing" ? "Menyimpan…" : "Sambung Google"}</button>
       </header>
 
       <nav className="desktop-nav" aria-label="Navigasi utama">
@@ -149,7 +189,7 @@ function Dashboard({ stats, records, search, setSearch, go, syncDrive, driveStat
     <section className="recent panel">
       <div className="section-head"><div><p className="eyebrow">Aktiviti terkini</p><h2>Rekod terbaru</h2></div><label className="search">⌕<input value={search} onChange={e => setSearch(e.target.value)} placeholder="Cari rekod…" /></label></div>
       <div className="record-list">
-        {shown.map(r => <article key={r.id}><div className={`record-icon ${r.module}`}>{r.module === "log" ? "✓" : r.module === "asset" ? "↗" : "⚡"}</div><div><strong>{r.title}</strong><small>{r.subtitle}</small></div><time>{new Date(`${r.date}T00:00`).toLocaleDateString("ms-MY", { day: "numeric", month: "short" })}</time><span className={`badge ${r.status.toLowerCase()}`}>{r.status}</span></article>)}
+        {shown.map(r => <article key={r.id}><div className={`record-icon ${r.module}`}>{r.module === "log" ? "✓" : r.module === "asset" ? "↗" : "⚡"}</div><div><strong>{r.title}</strong><small>{r.subtitle}</small>{r.data.documentUrl && <a className="doc-link" href={r.data.documentUrl} target="_blank" rel="noreferrer">Buka Google Doc ↗</a>}</div><time>{new Date(`${r.date}T00:00`).toLocaleDateString("ms-MY", { day: "numeric", month: "short" })}</time><span className={`badge ${r.status.toLowerCase()}`}>{r.status}</span></article>)}
         {!shown.length && <div className="empty">Tiada rekod sepadan.</div>}
       </div>
     </section>
