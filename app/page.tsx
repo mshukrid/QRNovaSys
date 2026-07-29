@@ -47,9 +47,19 @@ export default function Home() {
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     setRecords(saved ? JSON.parse(saved) : seed);
-    const token = localStorage.getItem(DRIVE_TOKEN_KEY) || "";
+    const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const linkToken = fragment.get("google-token")?.trim() || "";
+    if (linkToken) {
+      localStorage.setItem(DRIVE_TOKEN_KEY, linkToken);
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    }
+    const token = linkToken || localStorage.getItem(DRIVE_TOKEN_KEY) || "";
     setDriveToken(token);
     setDriveState(token ? "ready" : "offline");
+    if (linkToken) {
+      setToast("Google Sheets & Docs telah disambungkan pada peranti ini");
+      setTimeout(() => setToast(""), 3200);
+    }
   }, []);
 
   useEffect(() => {
