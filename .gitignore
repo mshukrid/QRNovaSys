@@ -42,6 +42,8 @@ next-env.d.ts
 /work/
 /.pnpm-store/
 /build/
+/.site-package/
+/qrnova-site.tar.gz
 
 # local reference documents (not published)
 /*.docx
