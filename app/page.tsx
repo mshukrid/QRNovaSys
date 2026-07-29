@@ -10,12 +10,25 @@ type RecordItem = {
   subtitle: string;
   status: string;
   date: string;
+  createdAt?: string;
   data: Record<string, string>;
 };
 
 const STORAGE_KEY = "qrnova-lab-records";
 const DRIVE_TOKEN_KEY = "qrnova-drive-token";
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw4zPOHM9jx4xoNYOAliZxCW-0FfCVeJalFpP9_UnCrIMFv03zaIcAbWNkjCk5hlBbiiQ/exec";
+
+async function driveRequest(token: string, payload: Record<string, unknown>) {
+  const response = await fetch(APPS_SCRIPT_URL, {
+    method: "POST",
+    redirect: "follow",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ token, ...payload }),
+  });
+  const result = await response.json();
+  if (!result.success) throw new Error(result.error || "Sambungan Google gagal.");
+  return result;
+}
 const tabs: { id: Module; label: string; short: string; icon: string }[] = [
   { id: "dashboard", label: "Ringkasan", short: "Utama", icon: "⌂" },
   { id: "log", label: "Buku Log", short: "Log", icon: "✓" },
@@ -46,7 +59,8 @@ export default function Home() {
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    setRecords(saved ? JSON.parse(saved) : seed);
+    const localRecords: RecordItem[] = saved ? JSON.parse(saved) : seed;
+    setRecords(localRecords);
     const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""));
     const linkToken = fragment.get("google-token")?.trim() || "";
     if (linkToken) {
@@ -56,9 +70,22 @@ export default function Home() {
     const token = linkToken || localStorage.getItem(DRIVE_TOKEN_KEY) || "";
     setDriveToken(token);
     setDriveState(token ? "ready" : "offline");
-    if (linkToken) {
-      setToast("Google Sheets & Docs telah disambungkan pada peranti ini");
-      setTimeout(() => setToast(""), 3200);
+    if (token) {
+      setDriveState("syncing");
+      void driveRequest(token, { action: "list" })
+        .then(result => {
+          const remote = (result.records || []) as RecordItem[];
+          const remoteIds = new Set(remote.map(record => record.id));
+          const pending = localRecords.filter(record =>
+            record.data?._syncStatus === "pending" && !remoteIds.has(record.id));
+          setRecords([...remote, ...pending]);
+          setDriveState("ready");
+          if (linkToken) {
+            setToast(`${remote.length} rekod Google Drive dimuatkan`);
+            setTimeout(() => setToast(""), 3200);
+          }
+        })
+        .catch(() => setDriveState("ready"));
     }
   }, []);
 
@@ -74,7 +101,8 @@ export default function Home() {
   }), [records]);
 
   const save = async (module: RecordItem["module"], form: HTMLFormElement) => {
-    const data = Object.fromEntries(new FormData(form).entries()) as Record<string, string>;
+    const formData = Object.fromEntries(new FormData(form).entries()) as Record<string, string>;
+    const data: Record<string, string> = { ...formData, _syncStatus: "pending" };
     const today = new Date().toISOString().slice(0, 10);
     const item: RecordItem = {
       id: crypto.randomUUID(),
@@ -98,19 +126,15 @@ export default function Home() {
     setDriveState("syncing");
     setToast("Menyimpan ke Google Sheets…");
     try {
-      const response = await fetch(APPS_SCRIPT_URL, {
-        method: "POST",
-        redirect: "follow",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ token: driveToken, module, data: { ...data, id: item.id } }),
+      const result = await driveRequest(driveToken, {
+        module, data: { ...formData, id: item.id },
       });
-      const result = await response.json();
-      if (!result.success) throw new Error(result.error || "Sambungan Google gagal.");
-      if (result.documentUrl) {
-        setRecords(prev => prev.map(record => record.id === item.id
-          ? { ...record, data: { ...record.data, documentUrl: result.documentUrl } }
-          : record));
-      }
+      setRecords(prev => prev.map(record => record.id === item.id
+        ? { ...record, data: {
+          ...record.data, _syncStatus: "synced",
+          ...(result.documentUrl ? { documentUrl: result.documentUrl } : {}),
+        } }
+        : record));
       setDriveState("ready");
       setToast(result.documentUrl
         ? "Disimpan ke Sheet • Google Doc berjaya dijana"
@@ -127,17 +151,36 @@ export default function Home() {
     void save(module, e.currentTarget);
   };
 
-  const syncDrive = () => {
-    const token = window.prompt(
-      "Tampal WEB_API_TOKEN daripada log setupProject(). Token disimpan pada peranti ini sahaja.",
-      driveToken,
-    );
-    if (!token?.trim()) return;
-    localStorage.setItem(DRIVE_TOKEN_KEY, token.trim());
-    setDriveToken(token.trim());
-    setDriveState("ready");
-    setToast("Google Sheets & Docs telah disambungkan");
-    setTimeout(() => setToast(""), 2800);
+  const syncDrive = async () => {
+    let token = driveToken;
+    if (!token) {
+      token = window.prompt(
+        "Tampal WEB_API_TOKEN daripada log setupProject(). Token disimpan pada peranti ini sahaja.",
+        "",
+      )?.trim() || "";
+      if (!token) return;
+      localStorage.setItem(DRIVE_TOKEN_KEY, token);
+      setDriveToken(token);
+    }
+
+    setDriveState("syncing");
+    setToast("Membaca rekod daripada Google Sheet…");
+    try {
+      const result = await driveRequest(token, { action: "list" });
+      const remote = (result.records || []) as RecordItem[];
+      const remoteIds = new Set(remote.map(record => record.id));
+      setRecords(previous => [
+        ...remote,
+        ...previous.filter(record =>
+          record.data?._syncStatus === "pending" && !remoteIds.has(record.id)),
+      ]);
+      setDriveState("ready");
+      setToast(`Dashboard dikemas kini • ${remote.length} rekod dimuatkan`);
+    } catch (error) {
+      setDriveState("ready");
+      setToast(error instanceof Error ? error.message : "Google tidak dapat dihubungi");
+    }
+    setTimeout(() => setToast(""), 3600);
   };
 
   return (

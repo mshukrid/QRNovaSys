@@ -119,6 +119,10 @@ function doPost(e) {
     const request = JSON.parse(e.postData.contents);
     validateToken_(request.token);
 
+    if (String(request.action || '').toLowerCase() === 'list') {
+      return jsonResponse_({ success: true, records: listRecords_() });
+    }
+
     const moduleName = String(request.module || '').toLowerCase();
     if (!SHEETS[moduleName]) {
       throw new Error('Modul tidak sah. Gunakan log, asset atau mccb.');
@@ -134,6 +138,97 @@ function doPost(e) {
       error: error && error.message ? error.message : String(error)
     });
   }
+}
+
+function listRecords_() {
+  const spreadsheet = getStoredSpreadsheet_();
+  if (!spreadsheet) throw new Error('Jalankan setupProject() terlebih dahulu.');
+  ensureSheets_(spreadsheet);
+  const records = [];
+
+  readDataRows_(spreadsheet.getSheetByName(SHEETS.log.name)).forEach(function(row) {
+    records.push({
+      id: String(row[0] || ''), module: 'log',
+      title: String(row[6] || 'Buku Log'), subtitle: String(row[8] || row[3] || ''),
+      status: String(row[7] || 'Hadir'), date: formatDate_(row[2]),
+      createdAt: formatDateTime_(row[1]),
+      data: {
+        tarikh: formatDate_(row[2]), nama: String(row[3] || ''),
+        no_id: String(row[4] || ''), masa_masuk: String(row[5] || ''),
+        makmal: String(row[6] || ''), kehadiran: String(row[7] || ''),
+        aktiviti: String(row[8] || ''), catatan: String(row[9] || ''),
+        _syncStatus: 'synced'
+      }
+    });
+  });
+
+  readDataRows_(spreadsheet.getSheetByName(SHEETS.asset.name)).forEach(function(row) {
+    records.push({
+      id: String(row[0] || ''), module: 'asset',
+      title: 'PA-9 • ' + String(row[10] || 'Aset'), subtitle: String(row[3] || ''),
+      status: String(row[13] || 'Menunggu'), date: formatDate_(row[2]),
+      createdAt: formatDateTime_(row[1]),
+      data: {
+        tarikh: formatDate_(row[2]), nama: String(row[3] || ''),
+        jawatan: String(row[4] || ''), bahagian: String(row[5] || ''),
+        tujuan: String(row[6] || ''), tempat: String(row[7] || ''),
+        pengeluar: String(row[8] || ''), no_siri: String(row[9] || ''),
+        aset: String(row[10] || ''), tarikh_pulang: formatDate_(row[11]),
+        catatan: String(row[12] || ''), status: String(row[13] || ''),
+        documentUrl: String(row[14] || ''), _syncStatus: 'synced'
+      }
+    });
+  });
+
+  readDataRows_(spreadsheet.getSheetByName(SHEETS.mccb.name)).forEach(function(row) {
+    records.push({
+      id: String(row[0] || ''), module: 'mccb',
+      title: 'MCCB • ' + String(row[3] || 'Ujian'),
+      subtitle: [row[6], row[7]].filter(String).join(' '),
+      status: String(row[23] || 'Pending'), date: formatDate_(row[2]),
+      createdAt: formatDateTime_(row[1]),
+      data: {
+        tarikh: formatDate_(row[2]), rujukan: String(row[3] || ''),
+        job: String(row[4] || ''), syarikat: String(row[5] || ''),
+        jenama: String(row[6] || ''), model: String(row[7] || ''),
+        jenis: String(row[8] || ''), pole: String(row[9] || ''),
+        arus_kadar: String(row[10] || ''), kapasiti: String(row[11] || ''),
+        suhu_mula: String(row[12] || ''), suhu_akhir: String(row[13] || ''),
+        lembapan_mula: String(row[14] || ''), lembapan_akhir: String(row[15] || ''),
+        tcd: String(row[16] || ''), kabel: String(row[17] || ''),
+        tork: String(row[18] || ''), arus_105: String(row[19] || ''),
+        masa_105: String(row[20] || ''), arus_130: String(row[21] || ''),
+        masa_130: String(row[22] || ''), keputusan: String(row[23] || ''),
+        catatan: String(row[24] || ''), documentUrl: String(row[25] || ''),
+        _syncStatus: 'synced'
+      }
+    });
+  });
+
+  return records.filter(function(record) { return record.id; }).sort(function(a, b) {
+    return new Date(b.createdAt || b.date).getTime() -
+      new Date(a.createdAt || a.date).getTime();
+  });
+}
+
+function readDataRows_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn())
+    .getValues().filter(function(row) { return String(row[0] || '').trim(); });
+}
+
+function formatDate_(value) {
+  if (!value) return '';
+  return Object.prototype.toString.call(value) === '[object Date]'
+    ? Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd')
+    : String(value);
+}
+
+function formatDateTime_(value) {
+  if (!value) return '';
+  return Object.prototype.toString.call(value) === '[object Date]'
+    ? value.toISOString()
+    : String(value);
 }
 
 function saveRecord_(moduleName, data) {
