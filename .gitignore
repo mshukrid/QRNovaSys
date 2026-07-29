@@ -44,6 +44,8 @@ next-env.d.ts
 /build/
 /.site-package/
 /qrnova-site.tar.gz
+/.site-package-v*/
+/qrnova-site-v*.tar.gz
 
 # local reference documents (not published)
 /*.docx
